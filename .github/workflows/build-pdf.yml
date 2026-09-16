@@ -1,0 +1,104 @@
+name: Build PDF
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PDF_NAME: MURILO_SANTIAGO_PAVILA_MIRANDA_TRABALHO_SASI_2026_2.pdf
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile LaTeX
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: main.tex
+          working_directory: artigo
+          latexmk_use_xelatex: false
+          latexmk_shell_escape: false
+
+      - name: Prepare PDF for release/artifact
+        run: |
+          mkdir -p release
+          cp "artigo/main.pdf" "release/${PDF_NAME}"
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: artigo-${{ github.sha }}
+          path: release/${{ env.PDF_NAME }}
+          retention-days: 30
+
+  publish-latest:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download PDF
+        uses: actions/download-artifact@v4
+        with:
+          name: artigo-${{ github.sha }}
+          path: release
+
+      - name: Publish / update latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PDF_PATH: release/${{ env.PDF_NAME }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest "$PDF_PATH#${PDF_NAME}" --clobber
+            gh release edit latest --notes "PDF mais recente da branch \`main\`. Atualizado em $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+          else
+            gh release create latest "$PDF_PATH#${PDF_NAME}" \
+              --title "Artigo SASI - Última versão (main)" \
+              --notes "PDF mais recente da branch main."
+          fi
+
+  publish-tag-release:
+    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref_type == 'tag')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download PDF
+        uses: actions/download-artifact@v4
+        with:
+          name: artigo-${{ github.sha }}
+          path: release
+
+      - name: Publish PDF in GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
+          PDF_PATH: release/${{ env.PDF_NAME }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "$PDF_PATH#${PDF_NAME}" --clobber
+          else
+            gh release create "$TAG_NAME" "$PDF_PATH#${PDF_NAME}" \
+              --title "Artigo SASI $TAG_NAME" \
+              --notes "PDF gerado automaticamente pelo workflow Build PDF."
+          fi

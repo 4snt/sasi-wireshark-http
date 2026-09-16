@@ -1,0 +1,387 @@
+\documentclass[12pt]{article}
+
+\usepackage{sbc-template}
+\usepackage{graphicx,url}
+\usepackage[brazil]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{enumitem}
+\usepackage{placeins}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!10}
+}
+
+\sloppy
+
+\title{Análise de Tráfego HTTP com Wireshark em Ambiente Controlado}
+
+\author{Murilo Santiago Escobedo\inst{1}, Pávila Miranda Cardoso\inst{1}}
+
+\address{Sistemas de Informação -- Universidade Federal dos Vales do
+  Jequitinhonha e Mucuri (UFVJM)\\
+  Segurança e Auditoria de Sistemas de Informação (SASI) -- 2026/2\\
+  Diamantina -- MG -- Brasil
+  \email{murilo.santiago@gafit.com.br}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This paper describes a controlled experiment for capturing and analyzing
+HTTP traffic with Wireshark. A local HTTP server was created with Python
+inside a Kali Linux virtual machine, and the loopback interface was
+monitored while a browser requested a test page. The captured trace made
+it possible to observe the TCP three-way handshake, the HTTP GET request
+and its headers, the server response codes (304 and 200), the transmitted
+HTML content, and the connection teardown. The results show that, because
+HTTP does not provide encryption, both headers and payload travel in clear
+text and can be fully reconstructed by anyone with access to the traffic,
+reinforcing the practical relevance of HTTPS.
+\end{abstract}
+
+\begin{resumo}
+Este artigo descreve um experimento controlado de captura e análise de
+tráfego HTTP utilizando o Wireshark. Um servidor HTTP local foi criado com
+Python dentro de uma máquina virtual com Kali Linux, e a interface de
+loopback foi monitorada enquanto um navegador realizava requisições a uma
+página de teste. A captura obtida permitiu observar o estabelecimento da
+conexão TCP (\textit{three-way handshake}), a requisição HTTP GET e seus
+cabeçalhos, os códigos de resposta do servidor (304 e 200), o conteúdo HTML
+transmitido e o encerramento da conexão. Os resultados mostram que, por não
+oferecer criptografia, o protocolo HTTP expõe cabeçalhos e conteúdo em
+texto legível a quem tiver acesso ao tráfego, reforçando a relevância
+prática do uso de HTTPS.
+\end{resumo}
+
+\section{Introdução}
+
+A análise de tráfego de rede é uma técnica fundamental para compreender o
+funcionamento de protocolos de comunicação e para auditar a segurança de
+sistemas de informação. Ferramentas de captura de pacotes, como o
+Wireshark, permitem observar em detalhe os protocolos, endereços, portas,
+cabeçalhos e dados envolvidos em uma comunicação, sendo amplamente
+utilizadas tanto em atividades de defesa quanto de ofensiva em segurança da
+informação.
+
+O protocolo HTTP (\textit{Hypertext Transfer Protocol}) é a base da
+comunicação na Web e, em sua versão sem criptografia, transmite requisições
+e respostas em texto claro sobre uma conexão TCP previamente estabelecida
+\cite{fielding2014,postel1981}. Essa característica torna o HTTP um objeto
+de estudo interessante para demonstrar, de forma prática, por que a
+confidencialidade dos dados depende da adoção de camadas adicionais de
+segurança, como o TLS utilizado pelo HTTPS \cite{rescorla2018}.
+
+Neste trabalho, desenvolvido para a disciplina de Segurança e Auditoria de
+Sistemas de Informação (SASI), foi utilizado o Wireshark para capturar e
+analisar uma comunicação HTTP em um ambiente controlado baseado em Kali
+Linux. Para gerar o tráfego de forma reprodutível, foi criado um servidor
+HTTP local com Python, responsável por disponibilizar uma página HTML
+simples a um navegador. A partir da captura realizada na interface de
+loopback, foram analisadas as principais etapas da comunicação: o
+estabelecimento da conexão TCP, a requisição e a resposta HTTP, os
+cabeçalhos trocados, o conteúdo transmitido e o encerramento da conexão.
+
+O restante deste artigo está organizado da seguinte forma: a
+Seção~\ref{sec:metodo} descreve o ambiente e os procedimentos utilizados no
+experimento; a Seção~\ref{sec:resultados} apresenta e discute os resultados
+obtidos a partir da captura; e a Seção~\ref{sec:conclusao} apresenta as
+conclusões do trabalho.
+
+\section{Material e Métodos}\label{sec:metodo}
+
+O experimento foi realizado em uma máquina virtual executando o sistema
+operacional Kali Linux, hospedada em VirtualBox. O Quadro~\ref{tab:ambiente}
+resume o ambiente e as ferramentas utilizadas.
+
+\begin{table}[ht]
+\centering
+\caption{Ambiente utilizado no experimento}
+\label{tab:ambiente}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Item} & \textbf{Descrição} \\
+\hline
+Sistema operacional & Kali Linux \\
+\hline
+Ambiente & Máquina virtual (VirtualBox) \\
+\hline
+Ferramenta de análise & Wireshark \\
+\hline
+Servidor utilizado & Python \texttt{http.server} \\
+\hline
+Porta utilizada & 8000 \\
+\hline
+Interface capturada & Loopback (\texttt{lo}) \\
+\hline
+Endereço acessado & \texttt{127.0.0.1:8000} \\
+\hline
+\end{tabular}
+\end{table}
+
+A metodologia foi dividida em quatro etapas, descritas a seguir.
+
+\textbf{Criação do ambiente de teste.} Foi criado um arquivo
+\texttt{index.html} simples, contendo um título, um cabeçalho e um
+parágrafo identificando o curso e a disciplina. Esse arquivo foi
+disponibilizado por meio do servidor HTTP nativo do Python, iniciado com o
+comando apresentado no Código~\ref{lst:servidor}, o que evita a necessidade
+de configurar um servidor Web completo apenas para gerar tráfego HTTP
+controlado \cite{python-http-server}.
+
+\begin{lstlisting}[caption={Comando utilizado para iniciar o servidor HTTP},label={lst:servidor}]
+python3 -m http.server 8000
+\end{lstlisting}
+
+\textbf{Configuração da captura.} O Wireshark foi aberto no Kali Linux e
+configurado para capturar pacotes na interface de \textit{loopback}
+(\texttt{lo}), já que tanto o navegador quanto o servidor executavam na
+mesma máquina e se comunicavam pelo endereço \texttt{127.0.0.1}
+\cite{wireshark2024,kali2024}.
+
+\textbf{Geração do tráfego.} Com a captura em andamento, a página de teste
+foi acessada e recarregada pelo navegador, gerando o estabelecimento da
+conexão TCP, requisições HTTP do tipo GET e as respectivas respostas do
+servidor. Para evitar que o navegador reaproveitasse uma versão em cache da
+página, uma segunda requisição foi realizada utilizando um parâmetro de
+consulta diferente (\texttt{/?teste=1}), forçando uma nova resposta
+\texttt{200 OK} em vez de \texttt{304 Not Modified}.
+
+\textbf{Análise dos pacotes.} Após a captura, os pacotes foram analisados
+individualmente no Wireshark para identificar o estabelecimento da conexão
+TCP, os cabeçalhos da requisição e da resposta HTTP, o conteúdo HTML
+transmitido e o encerramento da conexão. Por fim, a funcionalidade
+\textit{Follow HTTP Stream} foi utilizada para reconstruir o fluxo completo
+da comunicação entre cliente e servidor.
+
+\section{Análise e Discussão dos Resultados}\label{sec:resultados}
+
+Esta seção apresenta os resultados obtidos a partir da captura de tráfego,
+seguindo a ordem cronológica dos eventos observados: acesso à página de
+teste, estabelecimento da conexão TCP, requisição e resposta HTTP,
+cabeçalhos, conteúdo transmitido e encerramento da conexão.
+
+\subsection{Página de teste e captura na interface de loopback}
+
+A Figura~\ref{fig:pagina-teste} mostra a página HTML de teste, acessada
+pelo navegador no endereço \texttt{http://127.0.0.1:8000}. Essa página
+serviu apenas como conteúdo a ser transmitido pelo servidor, permitindo
+observar de forma controlada o tráfego HTTP gerado pela requisição.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.85\textwidth]{img/fig1-pagina-teste.png}
+\caption{Página HTML de teste acessada pelo servidor HTTP local na porta 8000.}
+\label{fig:pagina-teste}
+\end{figure}
+
+Com o Wireshark capturando a interface \texttt{lo}, cada atualização da
+página no navegador gerou uma nova sequência de pacotes TCP e HTTP,
+listada na visão geral de pacotes do Wireshark (Figura~\ref{fig:lista}).
+Nessa lista é possível identificar o padrão típico de uma transação HTTP
+curta: os segmentos do \textit{three-way handshake}, o pacote contendo a
+requisição \texttt{GET}, o pacote de resposta do servidor e, por fim, os
+segmentos de encerramento da conexão.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig2-lista-pacotes.png}
+\caption{Visão geral dos pacotes capturados na interface de loopback,
+  mostrando o handshake TCP, a requisição HTTP e a resposta do servidor.}
+\label{fig:lista}
+\end{figure}
+
+\FloatBarrier
+\subsection{Estabelecimento da conexão TCP}
+
+Antes da troca de mensagens HTTP, o Wireshark permitiu identificar os três
+pacotes responsáveis pelo estabelecimento da conexão TCP, conhecido como
+\textit{Three-Way Handshake} \cite{postel1981}: um segmento \texttt{SYN}
+enviado pelo cliente a partir de uma porta temporária em direção à porta
+8000 do servidor; um segmento \texttt{SYN, ACK} enviado pelo servidor em
+resposta; e um segmento \texttt{ACK} enviado pelo cliente, que finaliza o
+handshake (Figura~\ref{fig:handshake}). Esses três segmentos apresentam
+comprimento de dados (\textit{TCP Segment Len}) igual a zero, pois sua
+função é apenas estabelecer a conexão, e não transportar conteúdo da
+aplicação. Somente após essa etapa é enviada a requisição HTTP GET.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig6-handshake-tcp.png}
+\caption{Detalhe de um dos segmentos do estabelecimento da conexão TCP
+  (\textit{Three-Way Handshake}), com a flag ACK confirmada.}
+\label{fig:handshake}
+\end{figure}
+
+\FloatBarrier
+\subsection{Requisição HTTP GET}
+
+Após o handshake, o pacote seguinte contém a requisição HTTP realizada
+pelo navegador. A Figura~\ref{fig:get} mostra o detalhe de uma dessas
+requisições, na qual se observa a linha inicial \texttt{GET / HTTP/1.1},
+o campo \texttt{Host}, identificando o servidor de destino
+(\texttt{127.0.0.1:8000}), e o campo \texttt{User-Agent}, contendo
+informações sobre o navegador utilizado.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig3-requisicao-get.png}
+\caption{Requisição HTTP GET capturada pelo Wireshark durante o acesso ao servidor.}
+\label{fig:get}
+\end{figure}
+
+Uma análise mais detalhada dos cabeçalhos da requisição, apresentada na
+Figura~\ref{fig:headers}, revela ainda os campos \texttt{Accept},
+\texttt{Accept-Language} e \texttt{Accept-Encoding}, que informam,
+respectivamente, os tipos de conteúdo, os idiomas e os métodos de
+compressão aceitos pelo cliente, além do campo \texttt{Connection:
+keep-alive}, relacionado à manutenção da conexão para requisições
+subsequentes. O Wireshark também relaciona automaticamente a requisição à
+sua resposta por meio da anotação \texttt{[Response in frame: N]}, o que
+facilita seguir o fluxo completo da transação.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig5-cabecalhos-requisicao.png}
+\caption{Cabeçalhos completos de uma requisição HTTP GET, incluindo campos
+  \texttt{Accept}, \texttt{Accept-Language} e \texttt{Connection}.}
+\label{fig:headers}
+\end{figure}
+
+Do ponto de vista da segurança, esse resultado já demonstra que uma
+requisição HTTP revela, a qualquer observador com acesso ao tráfego,
+informações sobre o recurso solicitado e sobre o cliente que o solicitou.
+
+\FloatBarrier
+\subsection{Respostas do servidor: 304 e 200 OK}
+
+Duas situações de resposta foram observadas no experimento. Na primeira
+requisição, o servidor respondeu com o código \texttt{304 Not Modified},
+indicando que o recurso solicitado não havia sido alterado desde o último
+acesso e que o navegador poderia utilizar a versão já armazenada em cache,
+sem a necessidade de reenviar todo o conteúdo. Para obter uma nova
+transferência de conteúdo, uma segunda requisição foi realizada utilizando
+o parâmetro \texttt{?teste=1}, o que tornou a URL diferente da anterior e
+evitou o uso do cache pelo navegador.
+
+Essa segunda requisição resultou em uma resposta \texttt{HTTP/1.0 200 OK}
+(Figura~\ref{fig:ok}), na qual foram identificados campos relevantes:
+\texttt{Server: SimpleHTTP/0.6 Python/3.13.12}, identificando o software do
+servidor; \texttt{Content-Type: text/html}, indicando o tipo do conteúdo
+enviado; e \texttt{Content-Length}, informando o tamanho da resposta em
+bytes. O Wireshark relaciona ainda essa resposta à requisição
+correspondente por meio da anotação \texttt{[Request in frame: N]}.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig4-resposta-200-ok.png}
+\caption{Resposta HTTP/1.0 200 OK, contendo os cabeçalhos do servidor e o
+  início do conteúdo HTML (\texttt{<!DOCTYPE html>}) em texto claro.}
+\label{fig:ok}
+\end{figure}
+
+\FloatBarrier
+\subsection{Visualização do conteúdo transmitido}
+
+Ainda na resposta \texttt{200 OK}, foi possível observar, diretamente nos
+dados do pacote, o conteúdo HTML transmitido pelo servidor, incluindo
+trechos como \texttt{<title>Site de Teste</title>}, \texttt{<h1>Meu site de
+teste</h1>} e \texttt{<p>Curso: Sistemas de Informação</p>}. Isso ocorre
+porque a comunicação analisada utiliza HTTP sem criptografia: o conteúdo
+transmitido pode ser observado em texto legível por qualquer ferramenta
+que tenha acesso ao tráfego, como demonstrado neste experimento controlado.
+Em comunicações HTTPS, por outro lado, o conteúdo da camada de aplicação é
+protegido por criptografia durante o transporte, graças ao uso do TLS
+\cite{rescorla2018}.
+
+\FloatBarrier
+\subsection{Encerramento da conexão TCP}
+
+Após a troca das mensagens HTTP, foi analisado também o encerramento da
+conexão TCP. Foi identificado um segmento com as \textit{flags}
+\texttt{FIN} e \texttt{ACK} simultaneamente ativas (\texttt{Flags: 0x011}),
+enviado pela porta temporária do cliente em direção à porta 8000 do
+servidor (Figura~\ref{fig:fin}). A flag \texttt{FIN} indica a intenção de
+finalizar o envio de dados em uma direção da conexão, enquanto a flag
+\texttt{ACK} confirma o recebimento de informações anteriores. O segmento
+apresentou \textit{TCP Segment Len} igual a zero, confirmando que se
+tratava de um segmento de controle, sem dados de aplicação.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig7-encerramento-tcp.png}
+\caption{Segmento TCP com as flags FIN e ACK ativas, utilizado no
+  encerramento da conexão.}
+\label{fig:fin}
+\end{figure}
+
+Esse resultado evidencia que o TCP participa tanto do estabelecimento
+quanto do encerramento da comunicação utilizada pelo HTTP, de modo que o
+Wireshark permitiu acompanhar não apenas as mensagens HTTP, mas também as
+etapas da camada de transporte responsáveis por viabilizar essa
+comunicação.
+
+\FloatBarrier
+\subsection{Reconstrução da comunicação com Follow HTTP Stream}
+
+Como etapa final da análise, foi utilizada a funcionalidade
+\textit{Follow HTTP Stream} do Wireshark, que reúne, em uma única
+visualização, todos os dados pertencentes ao mesmo fluxo de comunicação
+entre cliente e servidor. A Figura~\ref{fig:stream} mostra essa
+reconstrução, na qual é possível observar, em sequência, a requisição
+completa enviada pelo navegador (método, \texttt{Host} e demais
+cabeçalhos) e a resposta completa do servidor (linha de status,
+cabeçalhos e conteúdo HTML).
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.95\textwidth]{img/fig8-follow-http-stream.png}
+\caption{Reconstrução do fluxo HTTP completo utilizando a funcionalidade
+  Follow HTTP Stream do Wireshark.}
+\label{fig:stream}
+\end{figure}
+
+Essa visualização resume o principal resultado deste trabalho do ponto de
+vista da segurança: em uma comunicação HTTP sem criptografia, tanto os
+metadados quanto o conteúdo da camada de aplicação podem ser inspecionados
+em texto legível por qualquer observador com acesso ao tráfego de rede
+\cite{stallings2015,kurose2021}.
+
+\FloatBarrier
+\section{Conclusão}\label{sec:conclusao}
+
+Este trabalho utilizou o Wireshark para analisar, de forma prática, as
+diferentes etapas envolvidas em uma comunicação HTTP realizada em um
+ambiente controlado baseado em Kali Linux. Por meio da captura de tráfego
+na interface de loopback, foi possível identificar o estabelecimento da
+conexão TCP via \textit{Three-Way Handshake}, a requisição HTTP GET
+enviada pelo navegador, os cabeçalhos trocados entre cliente e servidor,
+as respostas \texttt{304 Not Modified} e \texttt{200 OK}, o conteúdo HTML
+transmitido e o posterior encerramento da conexão.
+
+Os resultados demonstraram uma característica relevante do protocolo HTTP
+do ponto de vista da segurança da informação: como a comunicação analisada
+não utiliza criptografia, tanto os cabeçalhos quanto o conteúdo
+transmitido puderam ser observados em texto legível diretamente pelo
+Wireshark, sem qualquer esforço adicional de decodificação. Esse resultado
+evidencia, na prática, a importância do uso de HTTPS para garantir
+confidencialidade e integridade dos dados transmitidos entre clientes e
+servidores, especialmente em redes não controladas pelo usuário.
+
+Como trabalhos futuros, sugere-se repetir o experimento utilizando um
+servidor configurado com HTTPS, permitindo comparar diretamente o mesmo
+tráfego com e sem criptografia e evidenciar, de forma ainda mais clara, o
+papel do TLS na proteção da comunicação.
+
+\bibliographystyle{sbc}
+\bibliography{referencias}
+
+\end{document}
